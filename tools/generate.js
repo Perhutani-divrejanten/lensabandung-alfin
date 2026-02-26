@@ -3,158 +3,107 @@ const fs = require('fs');
 const path = require('path');
 const Handlebars = require('handlebars');
 
-/**
- * URL endpoint JSON dari Google Apps Script
- */
-const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwxSv8HmShXP5nng9NTAVgnDgGtfzNCXh8liAgsUWjtTcvRC9KrXpr-ioWLGmultck0fw/exec';
+const SHEETS_URL = process.env.SHEETS_URL || 'https://script.google.com/macros/s/AKfycbwxSv8HmShXP5nng9NTAVgnDgGtfzNCXh8liAgsUWjtTcvRC9KrXpr-ioWLGmultck0fw/exec';
 
-// Paths
 const TEMPLATE_PATH = path.join(__dirname, 'template.html');
 const ARTICLES_JSON_PATH = path.resolve(__dirname, '../articles.json');
 const OUT_DIR = path.resolve(__dirname, '../article');
-const IMG_DIR = 'img'; // Path relatif dari root
+const IMG_DIR = 'img';
 
-/**
- * Utility: convert string to slug
- */
 function toSlug(str) {
   if (!str) return 'unknown';
-  return str
-    .toString()
-    .trim()
-    .toLowerCase()
+  return str.toString().trim().toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
 
-/**
- * Backup articles.json
- */
 function backupArticlesJson() {
   const timestamp = Math.floor(Date.now() / 1000);
   const backupPath = `${ARTICLES_JSON_PATH}.bak.${timestamp}`;
   if (fs.existsSync(ARTICLES_JSON_PATH)) {
     fs.copyFileSync(ARTICLES_JSON_PATH, backupPath);
-    console.log(`✅ Backup articles.json: ${path.basename(backupPath)}`);
+    console.log(`✅ Backup: ${path.basename(backupPath)}`);
   }
 }
 
-/**
- * Read existing articles.json
- */
 function readExistingArticles() {
   try {
     if (fs.existsSync(ARTICLES_JSON_PATH)) {
-      const data = fs.readFileSync(ARTICLES_JSON_PATH, 'utf8');
-      return JSON.parse(data);
+      return JSON.parse(fs.readFileSync(ARTICLES_JSON_PATH, 'utf8'));
     }
-  } catch (err) {
-    console.warn(`⚠️  Error reading articles.json:`, err.message);
+  } catch (e) {
+    console.warn('⚠️  Error reading articles.json:', e.message);
   }
   return [];
 }
 
-/**
- * Main generator
- */
 async function generateArticles() {
   try {
-    console.log('📥 Mengambil data dari Google Sheets...');
-    const response = await axios.get(SHEETS_URL, { timeout: 10000 });
-    const newArticles = response.data;
-
+    console.log('📥 Fetching articles from Sheets...');
+    const resp = await axios.get(SHEETS_URL, { timeout: 10000 });
+    const newArticles = resp.data;
+    
     if (!Array.isArray(newArticles) || newArticles.length === 0) {
-      console.warn('⚠️  Data kosong atau format tidak valid.');
+      console.warn('⚠️  No articles found.');
       return;
     }
+    console.log(`📊 Found ${newArticles.length} articles.`);
 
-    console.log(`📊 Ditemukan ${newArticles.length} artikel dari Sheets.`);
-
-    // Read template
     if (!fs.existsSync(TEMPLATE_PATH)) {
-      console.error(`❌ Template tidak ditemukan: ${TEMPLATE_PATH}`);
+      console.error(`❌ Template not found: ${TEMPLATE_PATH}`);
       process.exit(1);
     }
-    const templateContent = fs.readFileSync(TEMPLATE_PATH, 'utf8');
-    const template = Handlebars.compile(templateContent);
+    const template = Handlebars.compile(fs.readFileSync(TEMPLATE_PATH, 'utf8'));
 
-    // Ensure output dir exists
     if (!fs.existsSync(OUT_DIR)) {
       fs.mkdirSync(OUT_DIR, { recursive: true });
-      console.log(`✅ Folder output dibuat: ${OUT_DIR}`);
     }
 
-    // Read existing articles
     let existingArticles = readExistingArticles();
-    console.log(`📖 Ditemukan ${existingArticles.length} artikel existing di articles.json`);
-
-    // Create lookup by slug to avoid duplicates
-    const existingSlugs = new Set(existingArticles.map(a => a.slug || ''));
-
-    // Backup before update
+    console.log(`📖 Found ${existingArticles.length} existing articles.`);
+    
     backupArticlesJson();
 
-    let newCount = 0;
-    let updateCount = 0;
-    let skipCount = 0;
+    let newCount = 0, updateCount = 0, skipCount = 0;
 
-    // Process each article
-    for (const sheetRow of newArticles) {
+    for (const row of newArticles) {
       try {
-        const slug = sheetRow.slug ? toSlug(sheetRow.slug) : toSlug(sheetRow.title);
-        
+        const slug = row.slug ? toSlug(row.slug) : toSlug(row.title);
         if (!slug || slug === 'unknown') {
-          console.warn(`⏭️  Lewati artikel (slug invalid): ${sheetRow.title}`);
+          console.warn(`⏭️  Skip: ${row.title}`);
           skipCount++;
           continue;
         }
 
-        // Prepare image path
-        let imagePath = '';
-        if (sheetRow.image) {
-          if (sheetRow.image.startsWith('http')) {
-            imagePath = sheetRow.image;
-          } else {
-            imagePath = `${IMG_DIR}/${sheetRow.image}`;
-          }
+        let imagePath = row.image && !row.image.startsWith('http') 
+          ? `${IMG_DIR}/${row.image}` 
+          : (row.image || '');
+        let imagePathForHTML = imagePath && !imagePath.startsWith('http')
+          ? `../${imagePath}`
+          : imagePath;
+
+        let content = row.content || row.excerpt || '<p>No content</p>';
+        if (content && !content.includes('<')) {
+          content = `<p>${content.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
         }
 
-        // For HTML files in article/ subfolder, prepend ../ to local image paths
-        let imagePathForHTML = imagePath;
-        if (imagePath && !imagePath.startsWith('http')) {
-          imagePathForHTML = `../${imagePath}`;
-        }
-        console.log(`🖼️  [${slug}] imagePath="${imagePath}", imagePathForHTML="${imagePathForHTML}"`);
-
-        // Auto-wrap plain text content in <p> tags if not HTML
-        let processedContent = sheetRow.content || sheetRow.excerpt || '<p>Konten tidak tersedia</p>';
-        if (processedContent && !processedContent.includes('<')) {
-          processedContent = `<p>${processedContent.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
-        }
-
-        // Prepare data for template
         const articleData = {
-          title: sheetRow.title || 'Tanpa Judul',
-          date: sheetRow.date || new Date().toISOString().split('T')[0],
-          category: sheetRow.category || sheetRow.badge || 'Berita',
-          badge: sheetRow.badge || sheetRow.category || 'Berita',
+          title: row.title || 'Untitled',
+          date: row.date || new Date().toISOString().split('T')[0],
+          category: row.category || row.badge || 'News',
+          badge: row.badge || row.category || 'News',
           image: imagePathForHTML,
-          content: processedContent,
-          author: sheetRow.author || '',
-          excerpt: sheetRow.excerpt || (sheetRow.content || '').replace(/<[^>]*>/g, '').substring(0, 150),
-          slug: slug
+          content,
+          author: row.author || '',
+          excerpt: row.excerpt || content.replace(/<[^>]*>/g, '').substring(0, 150),
+          slug
         };
 
-        // Render HTML
         const html = template(articleData);
+        fs.writeFileSync(path.join(OUT_DIR, `${slug}.html`), html, 'utf8');
 
-        // Write file
-        const filePath = path.join(OUT_DIR, `${slug}.html`);
-        fs.writeFileSync(filePath, html, 'utf8');
-
-        // Prepare JSON entry (untuk articles.json) - use original imagePath for root-level access
         const jsonEntry = {
           title: articleData.title,
           excerpt: articleData.excerpt.replace(/<[^>]*>/g, '').substring(0, 150),
@@ -162,257 +111,56 @@ async function generateArticles() {
           date: articleData.date,
           image: imagePath,
           url: `article/${slug}.html`,
-          slug: slug
+          slug
         };
+        if (articleData.author) jsonEntry.author = articleData.author;
 
-        // If author exists, add it
-        if (articleData.author) {
-          jsonEntry.author = articleData.author;
-        }
-
-        // Check if article exists (by slug)
-        const existingIndex = existingArticles.findIndex(a => a.slug === slug);
-        
-        if (existingIndex !== -1) {
-          // Update existing
-          existingArticles[existingIndex] = jsonEntry;
-          console.log(`🔄 Update: ${slug}.html`);
+        const idx = existingArticles.findIndex(a => a.slug === slug);
+        if (idx !== -1) {
+          existingArticles[idx] = jsonEntry;
+          console.log(`🔄 Update: ${slug}`);
           updateCount++;
         } else {
-          // Add new at beginning
           existingArticles.unshift(jsonEntry);
-          console.log(`✅ Baru: ${slug}.html`);
+          console.log(`✅ New: ${slug}`);
           newCount++;
         }
-
       } catch (err) {
-        console.error(`❌ Error memproses artikel (${sheetRow?.title}):`, err.message);
+        console.error(`❌ Error (${row?.title}):`, err.message);
       }
     }
 
-    // Write updated articles.json
-    const jsonPath = ARTICLES_JSON_PATH;
-    fs.writeFileSync(jsonPath, JSON.stringify(existingArticles, null, 2), 'utf8');
-    console.log(`💾 Update ${jsonPath}`);
-
-    // Summary
-    console.log(`\n📋 Ringkasan:`);
-    console.log(`   ✨ Artikel baru: ${newCount}`);
-    console.log(`   🔄 Artikel update: ${updateCount}`);
-    console.log(`   ⏭️  Dilewati: ${skipCount}`);
-    console.log(`   📁 Total artikel di DB: ${existingArticles.length}`);
-    console.log(`\n✅ Selesai! Artikel sudah siap di news.html, search.html, dan filter kategori`);
-
-  } catch (error) {
-    console.error('❌ Error fatal:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
+    // DELETE ARTICLES NOT IN SHEET
+    const sheetSlugs = new Set(newArticles.map(r => (r.slug ? toSlug(r.slug) : toSlug(r.title))).filter(s => s && s !== 'unknown'));
+    const removed = existingArticles.filter(a => !sheetSlugs.has(a.slug));
+    if (removed.length) {
+      console.log(`🗑️  Deleting ${removed.length} articles (not in sheet):`);
+      removed.forEach(a => {
+        console.log(`   - ${a.slug}`);
+        const f = path.join(OUT_DIR, `${a.slug}.html`);
+        if (fs.existsSync(f)) {
+          fs.unlinkSync(f);
+          console.log(`     deleted`);
+        }
+      });
+      existingArticles = existingArticles.filter(a => sheetSlugs.has(a.slug));
     }
-    process.exit(1);
-  }
-}
 
-// Run
-generateArticles();
+    fs.writeFileSync(ARTICLES_JSON_PATH, JSON.stringify(existingArticles, null, 2), 'utf8');
+    console.log(`💾 Updated ${ARTICLES_JSON_PATH}`);
 
-/**
- * Utility: convert string to slug
- */
-function toSlug(str) {
-  if (!str) return 'unknown';
-  return str
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-/**
- * Backup articles.json
- */
-function backupArticlesJson() {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const backupPath = `${ARTICLES_JSON_PATH}.bak.${timestamp}`;
-  if (fs.existsSync(ARTICLES_JSON_PATH)) {
-    fs.copyFileSync(ARTICLES_JSON_PATH, backupPath);
-    console.log(`✅ Backup articles.json: ${path.basename(backupPath)}`);
-  }
-}
-
-/**
- * Read existing articles.json
- */
-function readExistingArticles() {
-  try {
-    if (fs.existsSync(ARTICLES_JSON_PATH)) {
-      const data = fs.readFileSync(ARTICLES_JSON_PATH, 'utf8');
-      return JSON.parse(data);
-    }
+    console.log(`\n📋 Summary:`);
+    console.log(`   ✨ New: ${newCount}`);
+    console.log(`   🔄 Updated: ${updateCount}`);
+    console.log(`   ⏭️  Skipped: ${skipCount}`);
+    console.log(`   🗑️  Deleted: ${removed.length}`);
+    console.log(`   📁 Total: ${existingArticles.length}`);
+    console.log(`\n✅ Done!`);
   } catch (err) {
-    console.warn(`⚠️  Error reading articles.json:`, err.message);
-  }
-  return [];
-}
-
-/**
- * Main generator
- */
-async function generateArticles() {
-  try {
-    console.log('📥 Mengambil data dari Google Sheets...');
-    const response = await axios.get(SHEETS_URL, { timeout: 10000 });
-    const newArticles = response.data;
-
-    if (!Array.isArray(newArticles) || newArticles.length === 0) {
-      console.warn('⚠️  Data kosong atau format tidak valid.');
-      return;
-    }
-
-    console.log(`📊 Ditemukan ${newArticles.length} artikel dari Sheets.`);
-
-    // Read template
-    if (!fs.existsSync(TEMPLATE_PATH)) {
-      console.error(`❌ Template tidak ditemukan: ${TEMPLATE_PATH}`);
-      process.exit(1);
-    }
-    const templateContent = fs.readFileSync(TEMPLATE_PATH, 'utf8');
-    const template = Handlebars.compile(templateContent);
-
-    // Ensure output dir exists
-    if (!fs.existsSync(OUT_DIR)) {
-      fs.mkdirSync(OUT_DIR, { recursive: true });
-      console.log(`✅ Folder output dibuat: ${OUT_DIR}`);
-    }
-
-    // Read existing articles
-    let existingArticles = readExistingArticles();
-    console.log(`📖 Ditemukan ${existingArticles.length} artikel existing di articles.json`);
-
-    // Create lookup by slug to avoid duplicates
-    const existingSlugs = new Set(existingArticles.map(a => a.slug || ''));
-
-    // Backup before update
-    backupArticlesJson();
-
-    let newCount = 0;
-    let updateCount = 0;
-    let skipCount = 0;
-
-    // Process each article
-    for (const sheetRow of newArticles) {
-      try {
-        const slug = sheetRow.slug ? toSlug(sheetRow.slug) : toSlug(sheetRow.title);
-        
-        if (!slug || slug === 'unknown') {
-          console.warn(`⏭️  Lewati artikel (slug invalid): ${sheetRow.title}`);
-          skipCount++;
-          continue;
-        }
-
-        // Prepare image path
-        let imagePath = '';
-        if (sheetRow.image) {
-          if (sheetRow.image.startsWith('http')) {
-            imagePath = sheetRow.image;
-          } else {
-            imagePath = `${IMG_DIR}/${sheetRow.image}`;
-          }
-        }
-
-        // For HTML files in article/ subfolder, prepend ../ to local image paths
-        let imagePathForHTML = imagePath;
-        if (imagePath && !imagePath.startsWith('http')) {
-          imagePathForHTML = `../${imagePath}`;
-        }
-        console.log(`🖼️  [${slug}] imagePath="${imagePath}", imagePathForHTML="${imagePathForHTML}"`);
-
-        // Auto-wrap plain text content in <p> tags if not HTML
-        let processedContent = sheetRow.content || sheetRow.excerpt || '<p>Konten tidak tersedia</p>';
-        if (processedContent && !processedContent.includes('<')) {
-          processedContent = `<p>${processedContent.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
-        }
-
-        // Prepare data for template
-        const articleData = {
-          title: sheetRow.title || 'Tanpa Judul',
-          date: sheetRow.date || new Date().toISOString().split('T')[0],
-          badge: sheetRow.badge || sheetRow.category || 'Berita',
-          category: sheetRow.category || 'Umum',
-          image: imagePathForHTML,
-          content: processedContent,
-          author: sheetRow.author || '',
-          excerpt: sheetRow.excerpt || (sheetRow.content || '').substring(0, 150),
-          slug: slug
-        };
-
-        // Render HTML
-        const html = template(articleData);
-
-        // Write file
-        const filePath = path.join(OUT_DIR, `${slug}.html`);
-        fs.writeFileSync(filePath, html, 'utf8');
-
-        // Prepare JSON entry - use original imagePath for root-level access
-        const jsonEntry = {
-          title: articleData.title,
-          excerpt: articleData.excerpt.replace(/<[^>]*>/g, '').substring(0, 150),
-          category: articleData.category,
-          date: articleData.date,
-          image: imagePath,
-          url: `article/${slug}.html`,
-          slug: slug,
-          author: articleData.author || undefined
-        };
-
-        // Remove undefined author
-        if (!jsonEntry.author) delete jsonEntry.author;
-
-        // Check if article exists (by slug)
-        const existingIndex = existingArticles.findIndex(a => a.slug === slug);
-        
-        if (existingIndex !== -1) {
-          // Update existing
-          existingArticles[existingIndex] = jsonEntry;
-          console.log(`🔄 Update: ${slug}.html`);
-          updateCount++;
-        } else {
-          // Add new at beginning
-          existingArticles.unshift(jsonEntry);
-          console.log(`✅ Baru: ${slug}.html`);
-          newCount++;
-        }
-
-      } catch (err) {
-        console.error(`❌ Error memproses artikel (${sheetRow?.title}):`, err.message);
-      }
-    }
-
-    // Write updated articles.json
-    const jsonPath = ARTICLES_JSON_PATH;
-    fs.writeFileSync(jsonPath, JSON.stringify(existingArticles, null, 2), 'utf8');
-    console.log(`💾 Update ${jsonPath}`);
-
-    // Summary
-    console.log(`\n📋 Ringkasan:`);
-    console.log(`   ✨ Artikel baru: ${newCount}`);
-    console.log(`   🔄 Artikel update: ${updateCount}`);
-    console.log(`   ⏭️  Dilewati: ${skipCount}`);
-    console.log(`   📁 Total artikel di DB: ${existingArticles.length}`);
-    console.log(`\n✅ Selesai! Artikel sudah siap di news.html & search.html`);
-
-  } catch (error) {
-    console.error('❌ Error fatal:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
-    }
+    console.error('❌ Fatal:', err.message);
+    if (err.response?.data) console.error('Response:', err.response.data);
     process.exit(1);
   }
 }
 
-// Run
 generateArticles();
