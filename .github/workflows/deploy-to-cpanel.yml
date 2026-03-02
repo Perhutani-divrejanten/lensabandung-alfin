@@ -25,8 +25,7 @@ jobs:
       - name: Run static generator
         run: node tools/generate.js
 
-      - name: Deploy via SFTP (SSH) if private key provided
-        if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+      - name: Deploy via SFTP (SSH)
         uses: appleboy/scp-action@v0.1.6
         with:
           host: ${{ secrets.HOST }}
@@ -42,8 +41,8 @@ jobs:
             articles.json
           target: ${{ secrets.REMOTE_PATH }}
 
-      - name: Deploy via FTP fallback
-        if: ${{ secrets.FTP_PASS != '' }}
+      - name: Deploy via FTP fallback (optional)
+        if: failure()
         uses: SamKirkland/FTP-Deploy-Action@4.3.0
         with:
           server: ${{ secrets.FTP_HOST }}
