@@ -39,6 +39,50 @@ function readExistingArticles() {
   return [];
 }
 
+function scanLocalArticles() {
+  const localArticles = [];
+  if (!fs.existsSync(OUT_DIR)) return localArticles;
+  
+  const files = fs.readdirSync(OUT_DIR).filter(f => f.endsWith('.html') && !f.endsWith('-f.html'));
+  console.log(`📂 Found ${files.length} local HTML files in article/ folder`);
+  
+  for (const file of files) {
+    try {
+      const slug = file.replace('.html', '');
+      const filePath = path.join(OUT_DIR, file);
+      const content = fs.readFileSync(filePath, 'utf8');
+      
+      // Extract title from <h1> or <title> tag
+      let title = 'Untitled';
+      const h1Match = content.match(/<h1[^>]*>([^<]+)<\/h1>/);
+      const titleMatch = content.match(/<title>([^<]+)<\/title>/);
+      if (h1Match) title = h1Match[1].trim();
+      else if (titleMatch) title = titleMatch[1].trim();
+      
+      // Extract excerpt from first <p> tag
+      let excerpt = '';
+      const pMatch = content.match(/<p[^>]*>([^<]+)<\/p>/);
+      if (pMatch) excerpt = pMatch[1].trim().substring(0, 150);
+      
+      localArticles.push({
+        title,
+        excerpt,
+        category: 'Local',
+        date: new Date().toISOString().split('T')[0],
+        image: '',
+        url: `article/${slug}.html`,
+        slug,
+        isLocal: true
+      });
+      console.log(`   📄 ${slug}`);
+    } catch (err) {
+      console.warn(`   ⚠️  Error reading ${file}:`, err.message);
+    }
+  }
+  
+  return localArticles;
+}
+
 async function generateArticles() {
   try {
     console.log('📥 Fetching articles from Sheets...');
@@ -130,20 +174,33 @@ async function generateArticles() {
       }
     }
 
-    // DELETE ARTICLES NOT IN SHEET
+    // PRESERVE LOCAL ARTICLES (not from sheet)
     const sheetSlugs = new Set(newArticles.map(r => (r.slug ? toSlug(r.slug) : toSlug(r.title))).filter(s => s && s !== 'unknown'));
-    const removed = existingArticles.filter(a => !sheetSlugs.has(a.slug));
+    const localArticlesScan = scanLocalArticles();
+    
+    // Add local articles that are not in the sheets
+    let localPreserved = 0;
+    for (const local of localArticlesScan) {
+      const idx = existingArticles.findIndex(a => a.slug === local.slug);
+      if (!sheetSlugs.has(local.slug)) {
+        if (idx !== -1) {
+          existingArticles[idx] = local;
+        } else {
+          existingArticles.unshift(local);
+        }
+        localPreserved++;
+        console.log(`📌 Preserve local: ${local.slug}`);
+      }
+    }
+    
+    // Only delete articles that exist in sheet but were removed from sheet
+    const removed = existingArticles.filter(a => sheetSlugs.has(a.slug) === false && a.isLocal !== true);
     if (removed.length) {
-      console.log(`🗑️  Deleting ${removed.length} articles (not in sheet):`);
+      console.log(`🗑️  Would delete ${removed.length} articles (not in sheet and not local):`);
       removed.forEach(a => {
         console.log(`   - ${a.slug}`);
-        const f = path.join(OUT_DIR, `${a.slug}.html`);
-        if (fs.existsSync(f)) {
-          fs.unlinkSync(f);
-          console.log(`     deleted`);
-        }
       });
-      existingArticles = existingArticles.filter(a => sheetSlugs.has(a.slug));
+      existingArticles = existingArticles.filter(a => sheetSlugs.has(a.slug) || a.isLocal === true);
     }
 
     fs.writeFileSync(ARTICLES_JSON_PATH, JSON.stringify(existingArticles, null, 2), 'utf8');
@@ -153,7 +210,8 @@ async function generateArticles() {
     console.log(`   ✨ New: ${newCount}`);
     console.log(`   🔄 Updated: ${updateCount}`);
     console.log(`   ⏭️  Skipped: ${skipCount}`);
-    console.log(`   🗑️  Deleted: ${removed.length}`);
+    console.log(`   � Local preserved: ${localPreserved}`);
+    console.log(`   �🗑️  Deleted: ${removed.length}`);
     console.log(`   📁 Total: ${existingArticles.length}`);
     console.log(`\n✅ Done!`);
   } catch (err) {
