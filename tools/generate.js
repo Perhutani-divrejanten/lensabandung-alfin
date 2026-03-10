@@ -138,14 +138,40 @@ function scanLocalArticles() {
 async function generateArticles() {
   try {
     console.log('📥 Fetching articles from Sheets...');
-    const resp = await axios.get(SHEETS_URL, { timeout: 10000 });
-    const newArticles = resp.data;
+    let newArticles = [];
+    
+    try {
+      // Increased timeout to 30 seconds for Google Sheets API
+      const resp = await axios.get(SHEETS_URL, { timeout: 30000 });
+      newArticles = resp.data;
+      
+      if (!Array.isArray(newArticles) || newArticles.length === 0) {
+        console.warn('⚠️  No articles found from Sheets. Using existing articles.json');
+        // Use existing articles if Sheets is empty
+        newArticles = readExistingArticles();
+      } else {
+        console.log(`✅ Successfully fetched ${newArticles.length} articles from Sheets.`);
+      }
+    } catch (sheetError) {
+      if (sheetError.code === 'ECONNABORTED' || sheetError.message.includes('timeout')) {
+        console.warn('⚠️  ⏱️  Google Sheets API timeout - using existing articles.json');
+        // Use existing articles if timeout occurs
+        newArticles = readExistingArticles();
+        if (newArticles.length === 0) {
+          console.error('❌ No existing articles found either!');
+          process.exit(1);
+        }
+        console.log(`   Loaded ${newArticles.length} existing articles instead`);
+      } else {
+        throw sheetError;
+      }
+    }
     
     if (!Array.isArray(newArticles) || newArticles.length === 0) {
-      console.warn('⚠️  No articles found.');
+      console.warn('⚠️  No articles available.');
       return;
     }
-    console.log(`📊 Found ${newArticles.length} articles.`);
+    console.log(`📊 Processing ${newArticles.length} articles.`);
 
     if (!fs.existsSync(TEMPLATE_PATH)) {
       console.error(`❌ Template not found: ${TEMPLATE_PATH}`);
