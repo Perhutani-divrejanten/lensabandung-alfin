@@ -1,3 +1,4 @@
+
 {
   "description": "Konfigurasi untuk 34 portal berita. Edit nilai di bawah sesuai kebutuhan dan jalankan generate-sites.js",
   "basePath": "../",
@@ -30,13 +31,13 @@
     {
       "id": 3,
       "folderName": "site-03-portal3",
-      "siteName": "Warta Janten",
-      "email": "wartajanten@gmail.com",
-      "socialHandle": "wartajanten",
+      "siteName": "Lensa Bandung",
+      "email": "lensabandung@gmail.com",
+      "socialHandle": "lensabandung",
       "colors": {
-        "primary": "#065F46",
-        "dark": "#022C22",
-        "secondary": "#1E3A5F"
+        "primary": "#14532D",
+        "dark": "#052E16",
+        "secondary": "#1F3F5F"
       }
     },
     {
@@ -322,8 +323,8 @@
       "email": "fokusnusantara@gmail.com",
       "socialHandle": "fokusnusantara",
       "colors": {
-        "primary": "#065F46",
-        "dark": "#022C22",
+        "primary": "#14532D",
+        "dark": "#052E16",
         "secondary": "#6B3D51"
       }
     },

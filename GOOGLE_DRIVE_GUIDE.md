@@ -1,4 +1,4 @@
-# Cara Upload Gambar ke Google Drive untuk Indonesia Daily
+# Cara Upload Gambar ke Google Drive untuk Lensa Bandung
 
 ## Langkah-langkah Upload Gambar:
 
